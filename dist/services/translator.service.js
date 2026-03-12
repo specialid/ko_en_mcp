@@ -2,40 +2,37 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 dotenv.config();
 export class TranslatorService {
-    openaiKey;
     geminiKey;
     constructor() {
-        this.openaiKey = process.env.OPENAI_API_KEY || '';
         this.geminiKey = process.env.GEMINI_API_KEY || '';
     }
     /**
      * 한국어 프롬프트를 영어로 번역합니다.
-     * Gemini API 키가 있으면 Gemini를, 없으면 OpenAI를 사용합니다.
+     * Gemini API를 사용하여 번역을 수행합니다.
      */
     async translateToEnglish(text) {
         if (this.geminiKey) {
-            return this.translateWithGemini(text);
+            return await this.translateWithGemini(text);
         }
-        else if (this.openaiKey) {
-            return this.translateWithOpenAI(text);
-        }
-        console.warn('Warning: No API Key found. Returning original text.');
+        console.warn('Warning: No Gemini API Key found. Returning original text.');
         return { translatedText: `[Untranslated] ${text}`, sourceLang: 'KO', targetLang: 'EN' };
     }
     async translateWithGemini(text) {
-        // v1beta 및 gemini-1.5-flash-latest 사용하여 최신 모델 접근 및 안정성 확보
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${this.geminiKey}`;
+        const payload = {
+            contents: [{
+                    parts: [{
+                            text: `Translate the following Korean prompt into English for a large language model. Keep technical terms as they are and only output the translation: "${text}"`
+                        }]
+                }]
+        };
         try {
-            const response = await axios.post(url, {
-                contents: [{
-                        parts: [{
-                                text: `Translate the following Korean prompt into English for a large language model. Keep technical terms as they are and only output the translation: "${text}"`
-                            }]
-                    }]
-            }, {
+            console.error(`Attempting Gemini API call to: ${url.split('?')[0]}`);
+            const response = await axios.post(url, payload, {
                 headers: {
                     'Content-Type': 'application/json'
-                }
+                },
+                timeout: 10000
             });
             if (!response.data.candidates || response.data.candidates.length === 0) {
                 throw new Error('No translation candidates returned from Gemini');
@@ -45,32 +42,12 @@ export class TranslatorService {
         }
         catch (error) {
             const status = error.response?.status;
-            const data = JSON.stringify(error.response?.data);
-            console.error(`Gemini API Error [${status}]:`, data || error.message);
-            if (status === 404) {
-                throw new Error(`Gemini model not found (404). Endpoint: ${url.split('?')[0]}`);
+            const data = error.response?.data;
+            console.error(`Gemini API Error Detail [${status}]:`, JSON.stringify(data, null, 2));
+            if (status === 403 && data?.error?.message?.includes('leaked')) {
+                throw new Error('GEMINI_API_KEY_LEAKED: The provided API key is marked as leaked by Google.');
             }
-            throw new Error(`Gemini translation failed [${status}]: ${error.message}`);
-        }
-    }
-    async translateWithOpenAI(text) {
-        const url = 'https://api.openai.com/v1/chat/completions';
-        try {
-            const response = await axios.post(url, {
-                model: "gpt-4o-mini",
-                messages: [
-                    { role: "system", content: "You are a professional translator. Translate the Korean prompt to English." },
-                    { role: "user", content: text }
-                ],
-                temperature: 0.3,
-            }, { headers: { 'Authorization': `Bearer ${this.openaiKey}` } });
-            return {
-                translatedText: response.data.choices[0].message.content.trim(),
-                sourceLang: 'KO', targetLang: 'EN'
-            };
-        }
-        catch (error) {
-            throw new Error(`OpenAI translation failed: ${error.message}`);
+            throw new Error(`Gemini translation failed [${status}]: ${error.message}${data ? ' - ' + JSON.stringify(data) : ''}`);
         }
     }
 }
